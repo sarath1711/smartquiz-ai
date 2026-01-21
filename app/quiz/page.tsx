@@ -1,34 +1,42 @@
 "use client";
+
 export const dynamic = "force-dynamic";
 
 import { useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 
 type Question = {
   question: string;
   options: string[];
-  answer: string; // "A", "B", "C", "D"
+  answer: string;
 };
 
 export default function QuizPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const topic = searchParams.get("topic");
 
+  const [topic, setTopic] = useState<string>("");
   const [questions, setQuestions] = useState<Question[]>([]);
-  const [userAnswers, setUserAnswers] = useState<string[]>([]);
+  const [answers, setAnswers] = useState<Record<number, string>>({});
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+  const [score, setScore] = useState(0);
 
-  // 🔐 Login protection
+  // ✅ Get topic safely (client-only)
   useEffect(() => {
-    const user = localStorage.getItem("user");
-    if (!user) router.push("/login");
+    const params = new URLSearchParams(window.location.search);
+    const t = params.get("topic");
+    if (!t) {
+      router.push("/");
+      return;
+    }
+    setTopic(t);
   }, [router]);
 
-  // 📥 Fetch quiz from API
+  // ✅ Fetch quiz
   useEffect(() => {
-    async function loadQuiz() {
+    if (!topic) return;
+
+    async function fetchQuiz() {
       try {
         const res = await fetch("/api/quiz", {
           method: "POST",
@@ -37,149 +45,145 @@ export default function QuizPage() {
         });
 
         const data = await res.json();
-
-        if (!data.questions || data.questions.length === 0) {
-          setError("No questions available.");
-          return;
-        }
-
-        setQuestions(data.questions);
-        setUserAnswers(new Array(data.questions.length).fill(""));
-      } catch {
-        setError("Failed to load quiz.");
+        setQuestions(data.questions || []);
+      } catch (err) {
+        console.error(err);
       } finally {
         setLoading(false);
       }
     }
 
-    if (topic) loadQuiz();
+    fetchQuiz();
   }, [topic]);
 
-  // ✅ Store selected option as A/B/C/D
-  function handleSelect(questionIndex: number, optionIndex: number) {
-    const updated = [...userAnswers];
-    updated[questionIndex] = String.fromCharCode(65 + optionIndex); // A, B, C, D
-    setUserAnswers(updated);
+  // ✅ Handle option select
+  function selectAnswer(qIndex: number, option: string) {
+    setAnswers({ ...answers, [qIndex]: option });
   }
 
-  // 🧮 Submit quiz and evaluate correctly
-  function handleSubmit() {
-    const userRaw = localStorage.getItem("user");
-    if (!userRaw) {
-      router.push("/login");
-      return;
-    }
+  // ✅ Submit quiz
+  function submitQuiz() {
+    let correct = 0;
 
-    const user = JSON.parse(userRaw);
-    const userKey = `quizAttempts_${user.email}`;
-
-    let score = 0;
     questions.forEach((q, i) => {
-      if (q.answer === userAnswers[i]) {
-        score++;
-      }
+      if (answers[i] === q.answer) correct++;
     });
 
-    const attempt = {
+    setScore(correct);
+    setSubmitted(true);
+
+    // 🔐 Save attempt (localStorage)
+    const user = JSON.parse(localStorage.getItem("user") || "{}");
+    const history = JSON.parse(localStorage.getItem("quizHistory") || "[]");
+
+    history.push({
+      email: user.email || "guest",
       topic,
-      score,
+      score: correct,
       total: questions.length,
       date: new Date().toISOString(),
-    };
+    });
 
-    const previousAttempts = JSON.parse(
-      localStorage.getItem(userKey) || "[]"
-    );
-
-    previousAttempts.push(attempt);
-
-    localStorage.setItem(
-      userKey,
-      JSON.stringify(previousAttempts)
-    );
-
-    sessionStorage.setItem(
-      "quizResult",
-      JSON.stringify({
-        topic,
-        score,
-        total: questions.length,
-      })
-    );
-
-    router.push("/result");
+    localStorage.setItem("quizHistory", JSON.stringify(history));
   }
 
-  // ⏳ Loading state
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-indigo-600 text-white text-xl">
-        ⏳ Loading quiz...
+      <div className="min-h-screen flex items-center justify-center text-xl font-semibold">
+        Loading quiz...
       </div>
     );
   }
 
-  // ❌ Error state
-  if (error) {
-    return (
-      <div className="min-h-screen flex items-center justify-center text-red-600 text-lg">
-        {error}
-      </div>
-    );
-  }
-
-  // 🧠 Quiz UI
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-purple-100 p-6">
-      <h2 className="text-3xl font-bold text-center text-indigo-700 mb-8">
-        🧠 {topic} Quiz
-      </h2>
+    <div className="min-h-screen bg-gradient-to-br from-indigo-500 to-purple-600 p-6">
+      <div className="max-w-3xl mx-auto bg-white rounded-3xl shadow-2xl p-8">
+        <h1 className="text-3xl font-extrabold text-center text-indigo-700 mb-6">
+          🧠 {topic} Quiz
+        </h1>
 
-      <div className="max-w-3xl mx-auto space-y-6">
-        {questions.map((q, i) => (
-          <div
-            key={i}
-            className="bg-white rounded-2xl shadow-xl p-6"
-          >
-            <p className="text-lg font-bold text-indigo-700 mb-4 bg-indigo-50 p-3 rounded-xl">
-              {i + 1}. {q.question}
+        {!submitted ? (
+          <>
+            {questions.map((q, i) => (
+              <div
+                key={i}
+                className="mb-6 p-5 rounded-2xl bg-indigo-50 border border-indigo-200"
+              >
+                <p className="font-semibold mb-3 text-gray-800">
+                  {i + 1}. {q.question}
+                </p>
+
+                {q.options.map((opt) => (
+                  <label
+                 key={opt}
+                className={`block p-3 rounded-xl cursor-pointer mb-3 border transition
+                ${
+                 answers[i] === opt
+                 ? "bg-indigo-600 text-white border-indigo-700"
+                : "bg-white text-gray-800 border-gray-300 hover:bg-indigo-100 hover:border-indigo-400"
+    }`}
+>
+
+                    <input
+                      type="radio"
+                      name={`q${i}`}
+                      className="hidden"
+                      onChange={() => selectAnswer(i, opt)}
+                    />
+                    {opt}
+                  </label>
+                ))}
+              </div>
+            ))}
+
+            <button
+              onClick={submitQuiz}
+              className="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-bold text-lg transition"
+            >
+              ✅ Submit Quiz
+            </button>
+          </>
+        ) : (
+          // 🎉 RESULT VIEW
+          <div className="text-center">
+            <h2 className="text-3xl font-bold mb-4 text-purple-700">
+              🎉 Quiz Completed!
+            </h2>
+
+            <p className="text-xl mb-4">
+              Score:
+              <span className="font-bold text-green-600 ml-2">
+                {score} / {questions.length}
+              </span>
             </p>
 
-            {q.options.map((opt, optIndex) => {
-              const optionLetter = String.fromCharCode(65 + optIndex);
+            <p
+              className={`text-lg font-semibold mb-6 ${
+                score / questions.length >= 0.5
+                  ? "text-green-600"
+                  : "text-red-600"
+              }`}
+            >
+              Accuracy: {Math.round((score / questions.length) * 100)}%
+            </p>
 
-              return (
-                <label
-                  key={optIndex}
-                  className="flex items-center gap-3 p-4 border rounded-xl mb-2 cursor-pointer hover:bg-indigo-50"
-                >
-                  <input
-                    type="radio"
-                    name={`q-${i}`}
-                    checked={userAnswers[i] === optionLetter}
-                    onChange={() => handleSelect(i, optIndex)}
-                    className="accent-indigo-600"
-                  />
+            <div className="flex gap-4 justify-center">
+              <button
+                onClick={() => router.push("/dashboard")}
+                className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold"
+              >
+                📊 Dashboard
+              </button>
 
-                  <span className="font-bold text-indigo-600">
-                    {optionLetter}.
-                  </span>
-
-                  <span className="text-gray-800">
-                    {opt}
-                  </span>
-                </label>
-              );
-            })}
+              <button
+                onClick={() => router.push("/")}
+                className="bg-gray-300 px-6 py-3 rounded-xl font-bold"
+              >
+                🏠 Home
+              </button>
+            </div>
           </div>
-        ))}
-
-        <button
-          onClick={handleSubmit}
-          className="w-full bg-gradient-to-r from-indigo-600 to-purple-600 text-white py-4 rounded-xl text-lg font-bold shadow-lg hover:scale-105 transition"
-        >
-          🚀 Submit Quiz
-        </button>
+        )}
       </div>
     </div>
   );
